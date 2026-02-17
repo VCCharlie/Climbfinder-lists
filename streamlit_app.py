@@ -16,7 +16,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# --- FUNCTIES ---
+# --- HULPFUNCTIES ---
 def clean_text(text):
     if not text: return ""
     return unicodedata.normalize("NFKD", text).strip()
@@ -35,6 +35,20 @@ def get_region_id(url_input):
         return url_input
     return None
 
+def is_valid_name(text):
+    """Check of de tekst een geldige naam kan zijn (geen afstand/stats)"""
+    if not text: return False
+    text = text.strip()
+    if len(text) < 3: return False
+    # Mag niet beginnen met een cijfer
+    if text[0].isdigit(): return False
+    # Mag geen 'km' of '%' bevatten als los woord
+    if "km" in text.lower() or "%" in text: return False
+    # Filter teksten als 'your best attempt'
+    if "attempt" in text.lower() or "poging" in text.lower(): return False
+    return True
+
+# --- SCRAPER LOGICA ---
 def scrape_data(region_id, start_p, end_p):
     all_climbs = []
     base_url = "https://climbfinder.com/en/ranking"
@@ -50,119 +64,73 @@ def scrape_data(region_id, start_p, end_p):
         try:
             time.sleep(random.uniform(0.5, 1.2))
             response = requests.get(base_url, params=params, headers=HEADERS)
-            
-            if response.status_code != 200:
-                st.warning(f"Pagina {page} overgeslagen (Status: {response.status_code})")
-                continue
-
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # --- STRATEGIE 1: TABEL (Meest waarschijnlijk op rankings) ---
-            rows = soup.select('table tbody tr')
-            
-            # --- STRATEGIE 2: KAARTEN (Fallback) ---
-            cards = []
-            if not rows:
-                cards = soup.find_all('div', class_=lambda x: x and 'card' in x)
-                if not cards: cards = soup.select('.list-group-item')
+            # Zoek elementen die op kaarten lijken
+            cards = soup.find_all('div', class_=lambda x: x and 'card' in x)
+            if not cards: cards = soup.find_all('a', class_=lambda x: x and 'card' in x)
+            if not cards: cards = soup.select('.list-group-item')
+            if not cards: cards = soup.select('tr') 
 
-            # --- VERWERKEN TABEL ---
-            if rows:
-                for row in rows:
-                    cols = row.find_all('td')
-                    if len(cols) < 3: continue
-                    
-                    # Kolom 2 is meestal de naam (index 1), Kolom 3 afstand (index 2), etc.
-                    # We zoeken de <a> tag in de naam-kolom voor de schoonste tekst
-                    name_col = cols[1]
-                    link = name_col.find('a')
-                    name = link.get_text(strip=True) if link else name_col.get_text(strip=True)
-                    
-                    # Als naam leeg is of rare tekst bevat
-                    if not name or name[0].isdigit():
-                        # Probeer image alt
-                        img = name_col.find('img')
-                        if img and img.get('alt'):
-                             name = img.get('alt').replace(" profile", "")
+            for card in cards:
+                full_text = card.get_text(" | ", strip=True)
+                
+                # Check of er data in zit
+                if "km" not in full_text: continue
 
-                    full_row_text = row.get_text(" ", strip=True)
-                    
-                    length = extract_number(full_row_text, r'(\d+\.?\d*)\s*km')
-                    gradient = extract_number(full_row_text, r'(\d+\.?\d*)\s*%')
-                    
-                    # Difficulty uit laatste kolom proberen te halen
-                    difficulty = 0
-                    try:
-                        # Zoek laatste getal in de rij
-                        numbers = re.findall(r'\b\d+\b', full_row_text)
-                        if numbers:
-                             # Pak grootste getal dat geen afstand/perc is
-                             candidates = [float(n) for n in numbers if float(n) > 20 and float(n) != length]
-                             if candidates: difficulty = int(max(candidates))
-                    except: pass
-                    
-                    elevation = int(length * gradient * 10)
-                    
-                    all_climbs.append({
-                        "Naam": name,
-                        "Afstand (km)": length,
-                        "Steiging (%)": gradient,
-                        "Hoogtemeters (m)": elevation,
-                        "Punten": difficulty,
-                        "Pagina": page
-                    })
+                # --- 1. NAAM ZOEKEN (STRIKT) ---
+                name = "Unknown"
+                
+                # A. Probeer headers
+                headers = card.find_all(['h2', 'h3', 'h4', 'strong', 'b', 'a'])
+                for h in headers:
+                    cand = h.get_text(strip=True)
+                    if is_valid_name(cand):
+                        name = cand
+                        break
+                
+                # B. Probeer Image Alt
+                if name == "Unknown":
+                    img = card.find('img')
+                    if img and img.get('alt'):
+                        cand = img.get('alt').replace(" profile", "").replace(" profiel", "")
+                        if is_valid_name(cand):
+                            name = cand
 
-            # --- VERWERKEN KAARTEN (Als er geen tabel is) ---
-            elif cards:
-                for card in cards:
-                    full_text = card.get_text(" | ", strip=True)
-                    if "km" not in full_text: continue
+                # C. Probeer tekst te splitsen
+                if name == "Unknown":
+                    parts = full_text.split("|")
+                    for part in parts:
+                        if is_valid_name(part):
+                            name = part
+                            break
+                
+                if name == "Unknown": continue
 
-                    # Naam Extractie (Verbeterd)
-                    name = "Unknown"
-                    
-                    # 1. Zoek naar specifieke titels
-                    header = card.find(['h2', 'h3', 'h4', 'strong', 'b', 'a'])
-                    if header:
-                         # Filter "Your best attempt" en dat soort teksten eruit
-                         candidate = header.get_text(strip=True)
-                         if "attempt" not in candidate.lower() and not candidate[0].isdigit():
-                             name = candidate
-                    
-                    # 2. Image alt fallback
-                    if name == "Unknown":
-                        img = card.find('img')
-                        if img and img.get('alt'):
-                            name = img.get('alt').replace(" profile", "")
+                # --- 2. STATS EXTRACTIE ---
+                length = extract_number(full_text, r'(\d+\.?\d*)\s*km')
+                gradient = extract_number(full_text, r'(\d+\.?\d*)\s*%')
+                elevation = int(length * gradient * 10)
+                
+                # --- 3. DIFFICULTY ---
+                difficulty = 0
+                numbers = re.findall(r'\b\d+\b', full_text)
+                if numbers:
+                    candidates = []
+                    for n in numbers:
+                        val = float(n)
+                        if val > 20 and val != length and val != gradient:
+                            candidates.append(val)
+                    if candidates: difficulty = int(max(candidates))
 
-                    # 3. Text split fallback (maar filter nummers)
-                    if name == "Unknown":
-                        parts = full_text.split("|")
-                        for part in parts:
-                            clean_part = part.strip()
-                            # Pak het eerste stuk dat geen getal is en geen 'km' heeft
-                            if clean_part and not clean_part[0].isdigit() and "km" not in clean_part:
-                                name = clean_part
-                                break
-
-                    length = extract_number(full_text, r'(\d+\.?\d*)\s*km')
-                    gradient = extract_number(full_text, r'(\d+\.?\d*)\s*%')
-                    elevation = int(length * gradient * 10)
-                    
-                    difficulty = 0
-                    numbers = re.findall(r'\b\d+\b', full_text)
-                    if numbers:
-                        candidates = [float(n) for n in numbers if float(n) > 20 and float(n) != length]
-                        if candidates: difficulty = int(max(candidates))
-
-                    all_climbs.append({
-                        "Naam": name,
-                        "Afstand (km)": length,
-                        "Steiging (%)": gradient,
-                        "Hoogtemeters (m)": elevation,
-                        "Punten": difficulty,
-                        "Pagina": page
-                    })
+                all_climbs.append({
+                    "Naam": name,
+                    "Afstand (km)": length,
+                    "Steiging (%)": gradient,
+                    "Hoogtemeters (m)": elevation,
+                    "Punten": difficulty,
+                    "Pagina": page
+                })
             
         except Exception as e:
             st.error(f"Fout op pagina {page}: {e}")
@@ -173,51 +141,37 @@ def scrape_data(region_id, start_p, end_p):
     progress_bar.empty()
     return pd.DataFrame(all_climbs)
 
-# --- UI LAYOUT ---
+# --- UI WEERGAVE ---
 st.title("🚲 Climbfinder Aggregator")
 st.markdown("Download ranglijsten direct naar Excel.")
 
-# Sidebar Input
 with st.sidebar:
     st.header("Instellingen")
-    url_input = st.text_input("Climbfinder URL / ID", 
-                              value="288",
-                              help="Plak de URL (met ?l=...) of vul het ID in (bv. 288 voor Haute Savoie).")
-    
+    url_input = st.text_input("Climbfinder URL / ID", value="288")
     col1, col2 = st.columns(2)
-    with col1:
-        start_p = st.number_input("Van Pagina", 1, 100, 1)
-    with col2:
-        end_p = st.number_input("Tot Pagina", 1, 100, 2)
-    
+    with col1: start_p = st.number_input("Van Pagina", 1, 100, 1)
+    with col2: end_p = st.number_input("Tot Pagina", 1, 100, 2)
     scrape_btn = st.button("Start Scraping", type="primary", use_container_width=True)
 
-# Main Area
 if scrape_btn:
     region_id = get_region_id(url_input)
-    
     if not region_id:
-        st.error("❌ Geen geldig Regio ID gevonden. Controleer de URL.")
+        st.error("❌ Geen geldig ID.")
     else:
         st.success(f"Regio {region_id} gevonden. Bezig met ophalen...")
-        
         df = scrape_data(region_id, start_p, end_p)
         
         if not df.empty:
-            st.write(f"### 🎉 {len(df)} Beklimmingen Gevonden")
-            st.dataframe(df, use_container_width=True)
+            st.write(f"### 🎉 {len(df)} Beklimmingen")
             
-            col_d1, col_d2 = st.columns(2)
+            # HIER IS DE WIJZIGING: hide_index=True
+            st.dataframe(df, use_container_width=True, hide_index=True)
             
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            # Knoppen voor download
+            buf = BytesIO()
+            with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Climbs')
-                
-            with col_d1:
-                st.download_button("📥 Download Excel", buffer, f"climbfinder_{region_id}.xlsx", "application/vnd.ms-excel", use_container_width=True)
-                
-            csv = df.to_csv(index=False).encode('utf-8')
-            with col_d2:
-                st.download_button("📄 Download CSV", csv, f"climbfinder_{region_id}.csv", "text/csv", use_container_width=True)
+            
+            st.download_button("📥 Download Excel", buf, f"climbfinder_{region_id}.xlsx", "application/vnd.ms-excel", use_container_width=True)
         else:
-            st.warning("Geen data gevonden. Check of de regio correct is.")
+            st.warning("Geen data gevonden.")
