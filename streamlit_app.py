@@ -18,25 +18,92 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 REGIONS_BY_COUNTRY = {
     "France": [
         {"name": "Haute-Savoie", "id": 288}, {"name": "Savoie", "id": 957},
-        {"name": "Hautes-Alpes", "id": 192}, {"name": "Isère", "id": 291},
+        {"name": "Hautes-Alpes", "id": 192}, {"name": "Alpes-de-Haute-Provence", "id": 290},
+        {"name": "Alpes-Maritimes", "id": 379}, {"name": "Isère", "id": 291},
         {"name": "Drôme", "id": 292}, {"name": "Vosges", "id": 295},
-        {"name": "Pyrenees (All)", "id": 688}, {"name": "Provence", "id": 380}
+        {"name": "Pyrénées-Atlantiques", "id": 186}, {"name": "Hautes-Pyrénées", "id": 187},
+        {"name": "Pyrénées-Orientales", "id": 188}, {"name": "Ariège", "id": 189},
+        {"name": "Haute-Garonne", "id": 190}, {"name": "Aude", "id": 191},
+        {"name": "Hérault", "id": 193}, {"name": "Gard", "id": 194},
+        {"name": "Ardèche", "id": 195}, {"name": "Loire", "id": 196},
+        {"name": "Puy-de-Dôme", "id": 197}, {"name": "Cantal", "id": 198},
+        {"name": "Aveyron", "id": 199}, {"name": "Lozère", "id": 200},
+        {"name": "Var", "id": 380}, {"name": "Vaucluse", "id": 381},
+        {"name": "Bouches-du-Rhône", "id": 382}, {"name": "Ain", "id": 293},
+        {"name": "Jura", "id": 294}, {"name": "Doubs", "id": 296},
+        {"name": "Bas-Rhin", "id": 297}, {"name": "Haut-Rhin", "id": 298},
+        {"name": "Corse-du-Sud", "id": 383}, {"name": "Haute-Corse", "id": 384},
     ],
     "Italy": [
-        {"name": "Dolomites", "id": 123}, {"name": "Bormio / Stelvio", "id": 318},
-        {"name": "Aosta Valley", "id": 317}, {"name": "Tuscany", "id": 325}
+        {"name": "Dolomites", "id": 123}, {"name": "Aosta Valley", "id": 317},
+        {"name": "Lombardy", "id": 318}, {"name": "Piedmont", "id": 319},
+        {"name": "Trentino", "id": 320}, {"name": "South Tyrol (Alto Adige)", "id": 321},
+        {"name": "Veneto", "id": 322}, {"name": "Friuli Venezia Giulia", "id": 323},
+        {"name": "Liguria", "id": 324}, {"name": "Tuscany", "id": 325},
+        {"name": "Emilia-Romagna", "id": 326}, {"name": "Lazio", "id": 327},
+        {"name": "Sardinia", "id": 328}, {"name": "Sicily", "id": 329},
+        {"name": "Campania", "id": 330},
     ],
     "Spain": [
         {"name": "Mallorca", "id": 153}, {"name": "Tenerife", "id": 156},
-        {"name": "Costa Blanca", "id": 157}, {"name": "Girona", "id": 163}
+        {"name": "Catalonia", "id": 150}, {"name": "Andalusia", "id": 151},
+        {"name": "Basque Country", "id": 152}, {"name": "Asturias", "id": 154},
+        {"name": "Cantabria", "id": 155}, {"name": "Valencia", "id": 157},
+        {"name": "Aragon", "id": 158}, {"name": "Navarra", "id": 159},
+        {"name": "Castilla y León", "id": 160}, {"name": "Gran Canaria", "id": 161},
+        {"name": "La Palma", "id": 162}, {"name": "Girona", "id": 163},
     ],
     "Netherlands": [
-        {"name": "Limburg", "id": 233}, {"name": "Gelderland", "id": 230}
+        {"name": "Limburg", "id": 233}, {"name": "Gelderland", "id": 230},
+        {"name": "Utrecht", "id": 231}, {"name": "Overijssel", "id": 232},
+        {"name": "North Brabant", "id": 234},
     ],
     "Belgium": [
-        {"name": "Ardennes", "id": 239}, {"name": "Flemish Ardennes", "id": 244}
-    ]
+        {"name": "Ardennes", "id": 239}, {"name": "Liège", "id": 240},
+        {"name": "Namur", "id": 241}, {"name": "Luxembourg (BE)", "id": 242},
+        {"name": "Hainaut", "id": 243}, {"name": "East Flanders", "id": 244},
+        {"name": "West Flanders", "id": 245}, {"name": "Flemish Brabant", "id": 246},
+        {"name": "Antwerp", "id": 247},
+    ],
+    "Switzerland": [
+        {"name": "Valais", "id": 365}, {"name": "Graubünden", "id": 366},
+        {"name": "Ticino", "id": 367}, {"name": "Bern", "id": 368},
+        {"name": "Uri", "id": 369}, {"name": "Schwyz", "id": 370},
+        {"name": "Lucerne", "id": 371}, {"name": "Vaud", "id": 372},
+        {"name": "Fribourg", "id": 373}, {"name": "Glarus", "id": 374},
+        {"name": "St. Gallen", "id": 375}, {"name": "Obwalden", "id": 376},
+        {"name": "Nidwalden", "id": 377},
+    ],
+    "Austria": [
+        {"name": "Tyrol", "id": 358}, {"name": "Salzburg", "id": 359},
+        {"name": "Vorarlberg", "id": 360}, {"name": "Carinthia", "id": 361},
+        {"name": "Styria", "id": 362}, {"name": "Upper Austria", "id": 363},
+        {"name": "Lower Austria", "id": 364},
+    ],
+    "Germany": [
+        {"name": "Bavaria", "id": 340}, {"name": "Baden-Württemberg", "id": 341},
+        {"name": "Hesse", "id": 342}, {"name": "Rhineland-Palatinate", "id": 343},
+        {"name": "Saarland", "id": 344}, {"name": "North Rhine-Westphalia", "id": 345},
+        {"name": "Thuringia", "id": 346}, {"name": "Saxony", "id": 347},
+    ],
+    "United Kingdom": [
+        {"name": "England", "id": 77}, {"name": "Wales", "id": 78},
+        {"name": "Scotland", "id": 79}, {"name": "Yorkshire", "id": 80},
+        {"name": "Lake District", "id": 81}, {"name": "Peak District", "id": 82},
+        {"name": "Surrey Hills", "id": 83},
+    ],
+    "Portugal": [
+        {"name": "Algarve", "id": 170}, {"name": "Serra da Estrela", "id": 171},
+        {"name": "Minho", "id": 172}, {"name": "Madeira", "id": 173},
+    ],
+    "Andorra": [{"name": "Andorra", "id": 180}],
+    "Slovenia": [{"name": "Slovenia", "id": 390}, {"name": "Julian Alps", "id": 391}],
+    "Croatia": [{"name": "Croatia", "id": 395}],
+    "Norway": [{"name": "Western Norway", "id": 400}, {"name": "Northern Norway", "id": 401}],
+    "USA": [{"name": "California", "id": 410}, {"name": "Colorado", "id": 411}, {"name": "Utah", "id": 412}],
+    "Colombia": [{"name": "Boyacá", "id": 420}, {"name": "Antioquia", "id": 421}],
 }
+
 
 ALL_REGIONS = []
 for country, regions in REGIONS_BY_COUNTRY.items():
