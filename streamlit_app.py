@@ -39,7 +39,6 @@ def scrape_data(region_id, start_p, end_p):
     all_climbs = []
     base_url = "https://climbfinder.com/en/ranking"
     
-    # Progress bar setup
     progress_bar = st.progress(0)
     status_text = st.empty()
     total_pages = end_p - start_p + 1
@@ -49,7 +48,7 @@ def scrape_data(region_id, start_p, end_p):
         params = {'l': region_id, 'p': page, 's': 'popular'}
         
         try:
-            time.sleep(random.uniform(0.5, 1.2)) # Beleefde pauze
+            time.sleep(random.uniform(0.5, 1.2))
             response = requests.get(base_url, params=params, headers=HEADERS)
             
             if response.status_code != 200:
@@ -58,54 +57,52 @@ def scrape_data(region_id, start_p, end_p):
 
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # --- SELECTOR STRATEGIE ---
-            # We zoeken breed naar elementen die op een kaart lijken
-            cards = soup.find_all('div', class_=lambda x: x and 'card' in x)
-            if not cards: cards = soup.find_all('a', class_=lambda x: x and 'card' in x)
-            if not cards: cards = soup.select('.list-group-item')
+            # --- STRATEGIE 1: TABEL (Meest waarschijnlijk op rankings) ---
+            rows = soup.select('table tbody tr')
+            
+            # --- STRATEGIE 2: KAARTEN (Fallback) ---
+            cards = []
+            if not rows:
+                cards = soup.find_all('div', class_=lambda x: x and 'card' in x)
+                if not cards: cards = soup.select('.list-group-item')
 
-            page_climbs = 0
-            for card in cards:
-                full_text = card.get_text(" | ", strip=True)
-                
-                # Check of het data bevat
-                if "km" not in full_text or "%" not in full_text:
-                    continue
+            # --- VERWERKEN TABEL ---
+            if rows:
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) < 3: continue
+                    
+                    # Kolom 2 is meestal de naam (index 1), Kolom 3 afstand (index 2), etc.
+                    # We zoeken de <a> tag in de naam-kolom voor de schoonste tekst
+                    name_col = cols[1]
+                    link = name_col.find('a')
+                    name = link.get_text(strip=True) if link else name_col.get_text(strip=True)
+                    
+                    # Als naam leeg is of rare tekst bevat
+                    if not name or name[0].isdigit():
+                        # Probeer image alt
+                        img = name_col.find('img')
+                        if img and img.get('alt'):
+                             name = img.get('alt').replace(" profile", "")
 
-                # 1. Naam Extractie
-                name = "Unknown"
-                img = card.find('img')
-                if img and img.get('alt'):
-                    name = img.get('alt').replace(" profile", "").replace(" profiel", "")
-                
-                if name == "Unknown":
-                    header = card.find(['h2', 'h3', 'h4', 'strong', 'b'])
-                    if header: name = header.get_text(strip=True)
-                
-                if name == "Unknown" and "|" in full_text:
-                    name = full_text.split("|")[0].strip()
-
-                # 2. Getallen
-                length = extract_number(full_text, r'(\d+\.?\d*)\s*km')
-                gradient = extract_number(full_text, r'(\d+\.?\d*)\s*%')
-                
-                # 3. Berekeningen
-                # Hoogtemeters = km * 10 * % (Is een goede benadering als data mist)
-                elevation = int(length * gradient * 10)
-                
-                # 4. Difficulty Points (Gok op basis van max getal)
-                difficulty = 0
-                numbers = re.findall(r'\b\d+\b', full_text)
-                if numbers:
-                    candidates = []
-                    for n in numbers:
-                        n_float = float(n)
-                        # Punten zijn vaak hoger dan 20, en niet gelijk aan afstand/perc
-                        if n_float > 20 and n_float != length and n_float != gradient:
-                            candidates.append(n_float)
-                    if candidates: difficulty = int(max(candidates))
-
-                if length > 0:
+                    full_row_text = row.get_text(" ", strip=True)
+                    
+                    length = extract_number(full_row_text, r'(\d+\.?\d*)\s*km')
+                    gradient = extract_number(full_row_text, r'(\d+\.?\d*)\s*%')
+                    
+                    # Difficulty uit laatste kolom proberen te halen
+                    difficulty = 0
+                    try:
+                        # Zoek laatste getal in de rij
+                        numbers = re.findall(r'\b\d+\b', full_row_text)
+                        if numbers:
+                             # Pak grootste getal dat geen afstand/perc is
+                             candidates = [float(n) for n in numbers if float(n) > 20 and float(n) != length]
+                             if candidates: difficulty = int(max(candidates))
+                    except: pass
+                    
+                    elevation = int(length * gradient * 10)
+                    
                     all_climbs.append({
                         "Naam": name,
                         "Afstand (km)": length,
@@ -114,12 +111,62 @@ def scrape_data(region_id, start_p, end_p):
                         "Punten": difficulty,
                         "Pagina": page
                     })
-                    page_climbs += 1
+
+            # --- VERWERKEN KAARTEN (Als er geen tabel is) ---
+            elif cards:
+                for card in cards:
+                    full_text = card.get_text(" | ", strip=True)
+                    if "km" not in full_text: continue
+
+                    # Naam Extractie (Verbeterd)
+                    name = "Unknown"
+                    
+                    # 1. Zoek naar specifieke titels
+                    header = card.find(['h2', 'h3', 'h4', 'strong', 'b', 'a'])
+                    if header:
+                         # Filter "Your best attempt" en dat soort teksten eruit
+                         candidate = header.get_text(strip=True)
+                         if "attempt" not in candidate.lower() and not candidate[0].isdigit():
+                             name = candidate
+                    
+                    # 2. Image alt fallback
+                    if name == "Unknown":
+                        img = card.find('img')
+                        if img and img.get('alt'):
+                            name = img.get('alt').replace(" profile", "")
+
+                    # 3. Text split fallback (maar filter nummers)
+                    if name == "Unknown":
+                        parts = full_text.split("|")
+                        for part in parts:
+                            clean_part = part.strip()
+                            # Pak het eerste stuk dat geen getal is en geen 'km' heeft
+                            if clean_part and not clean_part[0].isdigit() and "km" not in clean_part:
+                                name = clean_part
+                                break
+
+                    length = extract_number(full_text, r'(\d+\.?\d*)\s*km')
+                    gradient = extract_number(full_text, r'(\d+\.?\d*)\s*%')
+                    elevation = int(length * gradient * 10)
+                    
+                    difficulty = 0
+                    numbers = re.findall(r'\b\d+\b', full_text)
+                    if numbers:
+                        candidates = [float(n) for n in numbers if float(n) > 20 and float(n) != length]
+                        if candidates: difficulty = int(max(candidates))
+
+                    all_climbs.append({
+                        "Naam": name,
+                        "Afstand (km)": length,
+                        "Steiging (%)": gradient,
+                        "Hoogtemeters (m)": elevation,
+                        "Punten": difficulty,
+                        "Pagina": page
+                    })
             
         except Exception as e:
             st.error(f"Fout op pagina {page}: {e}")
         
-        # Update balk
         progress_bar.progress((idx + 1) / total_pages)
 
     status_text.empty()
@@ -160,33 +207,17 @@ if scrape_btn:
             st.write(f"### 🎉 {len(df)} Beklimmingen Gevonden")
             st.dataframe(df, use_container_width=True)
             
-            # --- DOWNLOAD KNOPPEN ---
             col_d1, col_d2 = st.columns(2)
             
-            # Excel Logic
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Climbs')
                 
             with col_d1:
-                st.download_button(
-                    label="📥 Download Excel",
-                    data=buffer,
-                    file_name=f"climbfinder_{region_id}.xlsx",
-                    mime="application/vnd.ms-excel",
-                    use_container_width=True
-                )
+                st.download_button("📥 Download Excel", buffer, f"climbfinder_{region_id}.xlsx", "application/vnd.ms-excel", use_container_width=True)
                 
-            # CSV Logic
             csv = df.to_csv(index=False).encode('utf-8')
             with col_d2:
-                st.download_button(
-                    label="📄 Download CSV",
-                    data=csv,
-                    file_name=f"climbfinder_{region_id}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+                st.download_button("📄 Download CSV", csv, f"climbfinder_{region_id}.csv", "text/csv", use_container_width=True)
         else:
-            st.warning("Geen data gevonden. Misschien zijn er geen beklimmingen op deze pagina's?")
-      
+            st.warning("Geen data gevonden. Check of de regio correct is.")
