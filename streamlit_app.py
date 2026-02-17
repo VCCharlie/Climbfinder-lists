@@ -5,16 +5,21 @@ from bs4 import BeautifulSoup
 import re
 import time
 import io
-import json
+import unicodedata
 
 # ---------------------------------------------------------------------------
-# CONFIGURATIE & REGIO'S
+# CONFIGURATIE
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Climbfinder Aggregator", page_icon="🚲", layout="wide")
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+# Headers om een echte browser te simuleren
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://climbfinder.com/"
+}
 
-# Populaire regio's mapping (ingekort voor overzicht, werkt hetzelfde)
+# Regio mapping (idem als voorheen)
 REGIONS_BY_COUNTRY = {
     "France": [
         {"name": "Haute-Savoie", "id": 288}, {"name": "Savoie", "id": 957},
