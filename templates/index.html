@@ -1,1 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Climbfinder Ranking Aggregator</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
+    
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script> <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.print.min.js"></script>
+
+    <style>
+        .dt-button {
+            background-color: #10b981 !important; /* Tailwind Emerald-500 */
+            color: white !important;
+            border: none !important;
+            border-radius: 0.375rem !important;
+            padding: 0.5rem 1rem !important;
+            margin-right: 0.5rem !important;
+        }
+        .dt-button:hover {
+            background-color: #059669 !important;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        
+        <header class="mb-8 text-center">
+            <h1 class="text-4xl font-bold text-emerald-600 mb-2">Climbfinder Aggregator</h1>
+            <p class="text-slate-500">Scrape, Analyze, and Export Climbing Data to Excel/Google Sheets</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">1. Region Selection</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="regionInput" placeholder="Region Name (e.g. Savoie) or URL..." 
+                               class="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-emerald-500 outline-none">
+                        <button onclick="findRegion()" 
+                                class="bg-slate-800 text-white px-4 py-2 rounded hover:bg-slate-700 transition">
+                            Check
+                        </button>
+                    </div>
+                    <p id="regionStatus" class="text-xs mt-2 h-4 text-emerald-600 font-bold"></p>
+                    <input type="hidden" id="regionId">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">2. Scrape Configuration</label>
+                    <div class="flex items-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm">Start Page:</span>
+                            <input type="number" id="startPage" value="1" min="1" class="w-16 p-2 border rounded">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm">End Page:</span>
+                            <input type="number" id="endPage" value="2" min="1" class="w-16 p-2 border rounded">
+                        </div>
+                        <button onclick="runScraper()" id="scrapeBtn"
+                                class="bg-emerald-600 text-white px-6 py-2 rounded hover:bg-emerald-700 transition shadow-lg flex-grow">
+                            Start Scraping
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-4 p-3 bg-blue-50 text-blue-800 text-sm rounded border border-blue-100">
+                <strong>Tip:</strong> For Google Sheets, use the "Copy" button below once data is loaded, then simply Paste (Ctrl+V) into your spreadsheet.
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-bold mb-4 flex justify-between items-center">
+                <span>Results</span>
+                <span id="recordCount" class="text-sm font-normal text-slate-500">0 records found</span>
+            </h2>
+            
+            <div id="loader" class="hidden text-center py-10">
+                <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+                <p class="mt-2 text-slate-500">Scraping pages... This may take a moment.</p>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table id="resultsTable" class="w-full text-left border-collapse display">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Climb Name</th>
+                            <th>Length (km)</th>
+                            <th>Gradient (%)</th>
+                            <th>Difficulty (Pts)</th>
+                            <th>Source Page</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let table;
+
+        $(document).ready(function() {
+            // Initialize empty DataTable with export buttons
+            table = $('#resultsTable').DataTable({
+                dom: 'Bfrtip',
+                buttons: [
+                    'copyHtml5', // Useful for Google Sheets
+                    'excelHtml5',
+                    'csvHtml5'
+                ],
+                order: [[ 4, "desc" ]] // Sort by difficulty by default
+            });
+        });
+
+        async function findRegion() {
+            const query = document.getElementById('regionInput').value;
+            if(!query) return;
+
+            const status = document.getElementById('regionStatus');
+            status.textContent = "Checking...";
+            status.className = "text-xs mt-2 text-slate-500";
+
+            try {
+                const response = await fetch('/api/search_region', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('regionId').value = data.id;
+                    status.textContent = `✓ Selected: ${data.name} (ID: ${data.id})`;
+                    status.className = "text-xs mt-2 text-emerald-600 font-bold";
+                } else {
+                    status.textContent = `❌ ${data.message}`;
+                    status.className = "text-xs mt-2 text-red-500";
+                    document.getElementById('regionId').value = "";
+                }
+            } catch (error) {
+                console.error(error);
+                status.textContent = "Error connecting to server.";
+            }
+        }
+
+        async function runScraper() {
+            const regionId = document.getElementById('regionId').value;
+            const startPage = document.getElementById('startPage').value;
+            const endPage = document.getElementById('endPage').value;
+
+            if (!regionId) {
+                alert("Please identify a region first!");
+                return;
+            }
+
+            // UI Updates
+            const btn = document.getElementById('scrapeBtn');
+            const loader = document.getElementById('loader');
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            loader.classList.remove('hidden');
+            table.clear().draw();
+
+            try {
+                const response = await fetch('/api/scrape', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ 
+                        region_id: regionId, 
+                        start_page: startPage, 
+                        end_page: endPage 
+                    })
+                });
+                const result = await response.json();
+
+                if (result.data) {
+                    // Process data for DataTables
+                    // We map the JSON result to an array of arrays for the table
+                    const tableData = result.data.map(item => [
+                        item.rank || "-",
+                        item.name,
+                        item.length_km,
+                        item.gradient_avg,
+                        item.difficulty_points,
+                        item.page
+                    ]);
+                    
+                    table.rows.add(tableData).draw();
+                    document.getElementById('recordCount').textContent = `${result.count} records found`;
+                }
+
+            } catch (error) {
+                alert("Scraping failed. Check console for details.");
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+                loader.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
 
