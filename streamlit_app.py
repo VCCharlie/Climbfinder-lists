@@ -113,11 +113,10 @@ for country, regions in REGIONS_BY_COUNTRY.items():
 ALL_REGIONS.sort(key=lambda x: x["label"])
 
 # ---------------------------------------------------------------------------
-# HULPFUNCTIES (PARSING LOGICA)
+# PARSING LOGICA (VERBETERD)
 # ---------------------------------------------------------------------------
 
 def extract_number(text, pattern):
-    """Haalt een getal uit tekst op basis van regex patroon."""
     if not text: return 0.0
     match = re.search(pattern, text, re.IGNORECASE)
     if match:
@@ -127,84 +126,86 @@ def extract_number(text, pattern):
             return 0.0
     return 0.0
 
-def calculate_elevation(length_km, gradient_pct):
-    """Berekent hoogtemeters: km * 10 * %"""
-    if length_km and gradient_pct:
-        return int(length_km * gradient_pct * 10)
-    return 0
+def clean_name(text):
+    """
+    Maakt de naam schoon.
+    Als tekst is: 'Col du Galibier 34.8km 6%', wordt het: 'Col du Galibier'
+    """
+    if not text: return "Unknown"
+    
+    # Stap 1: Normaliseer (verwijder rare tekens)
+    text = unicodedata.normalize("NFKD", text).strip()
+    
+    # Stap 2: Alles voor het eerste getal pakken (als er een getal in staat)
+    # Regex zoekt naar het eerste cijfer dat gevolgd wordt door een punt of spatie
+    split_match = re.split(r'\d', text, maxsplit=1)
+    if split_match:
+        candidate = split_match[0].strip()
+        # Als wat overblijft langer is dan 2 letters, is dat wss de naam
+        if len(candidate) > 2:
+            return candidate.strip(" -|")
+            
+    return text
 
 def parse_html_content(html, page_number):
-    """Slimme parser die zowel tabellen als kaarten aankan."""
     soup = BeautifulSoup(html, "html.parser")
     climbs = []
 
-    # Zoek naar rijen in een tabel OF kaarten (cards)
-    # Climbfinder gebruikt soms <tr> en soms <div class="card">
-    items = soup.select('table tbody tr')
-    if not items:
-        items = soup.find_all('div', class_=lambda x: x and 'card' in x)
-    if not items:
-        items = soup.select('.list-group-item')
+    # Probeer specifieke items te vinden
+    items = soup.find_all('div', class_=lambda x: x and 'card' in x)
+    if not items: items = soup.select('.list-group-item')
+    if not items: items = soup.select('tr') # Fallback voor tabellen
 
     for item in items:
         full_text = item.get_text(" ", strip=True)
         
-        # Basis validatie: moet 'km' en '%' bevatten
-        if "km" not in full_text.lower() or "%" not in full_text:
+        # Basischeck: Moet stats bevatten
+        if "km" not in full_text.lower():
             continue
 
-        # --- 1. NAAM EXTRACTIE ---
+        # --- 1. NAAM EXTRACTIE (PRIORITEIT: AFBEELDING) ---
         name = "Unknown"
-        # Probeer link tekst (meest betrouwbaar)
-        link = item.find('a')
-        if link:
-            name_candidate = link.get_text(strip=True)
-            # Filter rare teksten
-            if len(name_candidate) > 2 and not name_candidate[0].isdigit():
-                name = name_candidate
         
-        # Fallback: Image alt text
-        if name == "Unknown":
-            img = item.find('img')
-            if img and img.get('alt'):
-                name = img.get('alt').replace(" profile", "").replace(" profiel", "")
-        
-        # Fallback: Headers
-        if name == "Unknown":
-            header = item.find(['h2', 'h3', 'h4', 'strong'])
-            if header: name = header.get_text(strip=True)
+        # A. Check Alt tag van plaatje (Dit is de veiligste methode!)
+        img = item.find('img')
+        if img and img.get('alt'):
+            raw_alt = img.get('alt')
+            # Verwijder termen als 'profile' of 'profiel'
+            name = re.sub(r'\s+profile|\s+profiel', '', raw_alt, flags=re.IGNORECASE).strip()
 
-        if name == "Unknown" or "attempt" in name.lower():
-            # Laatste redmiddel: splitten op pipe |
+        # B. Als geen plaatje, zoek headers (h2, h3, h5, bold)
+        if name == "Unknown":
+            header = item.find(['h2', 'h3', 'h4', 'h5', 'strong', 'b'])
+            if header:
+                name = clean_name(header.get_text(strip=True))
+
+        # C. Fallback: Als naam nog steeds "Unknown" is of op stats lijkt
+        if name == "Unknown" or any(char.isdigit() for char in name[:2]):
+            # Split de tekst op '|' of enter
             parts = full_text.split('|')
-            if parts: name = parts[0].strip()
+            name = clean_name(parts[0])
 
-        # --- 2. DATA EXTRACTIE (REGEX) ---
-        # Dit lost het probleem op van verschuivende kolommen
+        # Laatste check: als de naam 'km' bevat, is het mislukt
+        if "km" in name.lower() or len(name) < 3:
+            continue
+
+        # --- 2. DATA EXTRACTIE ---
         length_km = extract_number(full_text, r'(\d+\.?\d*)\s*km')
         gradient_pct = extract_number(full_text, r'(\d+\.?\d*)\s*%')
         
-        # --- 3. DIFFICULTY EXTRACTIE ---
-        # Punten zijn vaak een groot geheel getal, dat GEEN lengte of percentage is.
-        # We zoeken alle getallen in de tekst.
+        # --- 3. DIFFICULT POINTS (Grootste getal > 20) ---
         difficulty = 0
         all_numbers = re.findall(r'\b\d+\b', full_text)
-        
         candidates = []
         for n in all_numbers:
             val = float(n)
-            # Filter logica:
-            # - Moet groter zijn dan 20 (om kleine percentages/afstanden uit te sluiten)
-            # - Mag niet exact gelijk zijn aan de lengte (soms staat lengte er 2x in)
-            # - Mag niet het jaartal zijn (bv 2026)
-            if val > 20 and val < 3000 and val != length_km:
+            if val > 20 and val < 5000 and val != length_km:
                 candidates.append(int(val))
-        
         if candidates:
-            difficulty = max(candidates) # De punten zijn meestal het hoogste getal
+            difficulty = max(candidates)
 
-        # --- 4. HOOGTEMETERS ---
-        elevation = calculate_elevation(length_km, gradient_pct)
+        # --- 4. HOOGTEMETERS (Berekenen) ---
+        elevation = int(length_km * gradient_pct * 10)
 
         climbs.append({
             "Climb Name": name,
@@ -218,13 +219,10 @@ def parse_html_content(html, page_number):
     return climbs
 
 def scrape_page_requests(region_id, page):
+    # s=popular is belangrijk voor consistente sortering
     url = f"https://climbfinder.com/en/ranking?l={region_id}&p={page}&s=popular"
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer": "https://climbfinder.com/"
-    }
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200:
             return parse_html_content(r.text, page), None
         return [], f"Status {r.status_code}"
@@ -232,16 +230,13 @@ def scrape_page_requests(region_id, page):
         return [], str(e)
 
 # ---------------------------------------------------------------------------
-# STREAMLIT UI
+# UI LOGICA
 # ---------------------------------------------------------------------------
-st.title("Climbfinder Ranking Aggregator")
-st.markdown("Haal klimgegevens op, inclusief **berekende hoogtemeters**.")
+st.title("Climbfinder Aggregator 2.0")
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.header("Instellingen")
     
-    # Regio Kiezer
     country = st.selectbox("Land", ["Alles"] + sorted(REGIONS_BY_COUNTRY.keys()))
     if country == "Alles":
         opts = ALL_REGIONS
@@ -251,58 +246,44 @@ with st.sidebar:
     selected_region = st.selectbox("Kies Regio", opts, format_func=lambda x: x['label'])
     
     st.markdown("---")
-    custom_id = st.text_input("Of vul Regio ID in", value=str(selected_region['id']) if selected_region else "")
+    custom_id = st.text_input("Of vul ID in", value=str(selected_region['id']) if selected_region else "")
     
     col1, col2 = st.columns(2)
     start_p = col1.number_input("Start Pagina", 1, 100, 1)
-    end_p = col2.number_input("Eind Pagina", 1, 100, 1) # Default 1 pagina voor test
+    end_p = col2.number_input("Eind Pagina", 1, 100, 1)
     
-    btn = st.button("Start Scraping", type="primary", use_container_width=True)
+    btn = st.button("Start Scraping", type="primary")
 
-# --- HOOFDSCHERM ---
 if btn:
     rid = custom_id if custom_id else str(selected_region['id'])
     
-    st.info(f"Bezig met ophalen Regio {rid} (Pagina {start_p} t/m {end_p})...")
+    st.info(f"Ophalen Regio {rid}...")
     
     all_data = []
     progress = st.progress(0)
-    total = end_p - start_p + 1
     
     for i, p in enumerate(range(start_p, end_p + 1)):
         data, err = scrape_page_requests(rid, p)
-        if data:
-            all_data.extend(data)
-        elif err:
-            st.error(f"Fout op pagina {p}: {err}")
+        if data: all_data.extend(data)
         
-        progress.progress((i + 1) / total)
-        time.sleep(0.5) # Even wachten om server niet te boos te maken
+        progress.progress((i + 1) / (end_p - start_p + 1))
+        time.sleep(0.5)
     
     progress.empty()
     
     if all_data:
         df = pd.DataFrame(all_data)
+        # Volgorde kolommen dwingen
+        df = df[["Climb Name", "Length (km)", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)", "Page"]]
         
-        # Zorg dat kolommen in de juiste volgorde staan
-        cols = ["Climb Name", "Length (km)", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)", "Page"]
-        df = df[cols]
-        
-        st.success(f"Klaar! **{len(df)}** beklimmingen gevonden.")
+        st.success(f"{len(df)} klimmen gevonden!")
         st.dataframe(df, use_container_width=True, hide_index=True)
         
-        # Download Knoppen
-        c1, c2 = st.columns(2)
-        
-        # Excel
+        # Excel Export
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name="Climbs")
-        c1.download_button("📥 Download Excel", buffer, "climbs.xlsx", "application/vnd.ms-excel", use_container_width=True)
-        
-        # CSV
-        csv = df.to_csv(index=False).encode('utf-8')
-        c2.download_button("📄 Download CSV", csv, "climbs.csv", "text/csv", use_container_width=True)
-        
+            df.to_excel(writer, index=False)
+            
+        st.download_button("📥 Download Excel", buffer, "climbs.xlsx", "application/vnd.ms-excel")
     else:
-        st.warning("Geen data gevonden. Controleer het ID.")
+        st.error("Geen data. Check ID.")
