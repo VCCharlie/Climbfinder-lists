@@ -8,7 +8,6 @@ import random
 import unicodedata
 from io import BytesIO
 
-""
 Climbfinder Ranking Aggregator — Streamlit version.
 
 Lightweight alternative to the Flask app. No Codespace needed — runs
