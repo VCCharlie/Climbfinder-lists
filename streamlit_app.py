@@ -474,4 +474,84 @@ if fetch_btn:
     )
 
     if not region_id:
-        st.warning("Please 
+        st.warning("Please select a region or enter a custom Region ID.")
+    else:
+        if end_page < start_page:
+            st.warning("End page must be ≥ start page.")
+        else:
+            end_page = min(end_page, start_page + 19)
+            total_pages = end_page - start_page + 1
+
+            method = "playwright" if playwright_available() else "requests"
+            st.info(f"Scraping region **{region_id}** — pages {start_page}–{end_page} via {method}")
+
+            progress_bar = st.progress(0)
+            all_climbs = []
+            errors = []
+
+            for page_num in range(start_page, end_page + 1):
+                pct = int(((page_num - start_page) / total_pages) * 100)
+                progress_bar.progress(pct, text=f"Fetching page {page_num - start_page + 1} of {total_pages}...")
+
+                page_climbs, err = scrape_page(region_id, page_num)
+                if err:
+                    errors.append(f"Page {page_num}: {err}")
+                    break
+                if not page_climbs:
+                    break
+                all_climbs.extend(page_climbs)
+
+                if page_num < end_page:
+                    time.sleep(1.0)
+
+            progress_bar.progress(100, text="Done!")
+
+            if errors:
+                st.warning(f"Completed with issues: {'; '.join(errors)}")
+            elif not all_climbs:
+                st.warning("No climbs found. Check the region ID or try a different region.")
+            else:
+                st.success(f"Fetched **{len(all_climbs)}** climbs across **{len(range(start_page, start_page + len(all_climbs) // 25 + (1 if len(all_climbs) % 25 else 0)))}** pages.")
+
+            if all_climbs:
+                df = pd.DataFrame(all_climbs)
+                # Show only the 5 relevant columns in the correct order
+                display_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
+                df_display = df[display_cols].copy()
+                df_display.columns = ["Length (km)", "Climb Name", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)"]
+
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+                # Export buttons
+                col_a, col_b = st.columns(2)
+
+                # Excel export
+                excel_buf = io.BytesIO()
+                df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
+                col_a.download_button("Download Excel", data=excel_buf.getvalue(),
+                                      file_name="Climbfinder_Rankings.xlsx",
+                                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                # CSV export
+                csv_data = df_display.to_csv(index=False)
+                col_b.download_button("Download CSV", data=csv_data,
+                                      file_name="Climbfinder_Rankings.csv",
+                                      mime="text/csv")
+
+                # Store in session state for persistence
+                st.session_state["last_results"] = df_display
+
+# Show previous results if available
+elif "last_results" in st.session_state:
+    df_display = st.session_state["last_results"]
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    col_a, col_b = st.columns(2)
+    excel_buf = io.BytesIO()
+    df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
+    col_a.download_button("Download Excel", data=excel_buf.getvalue(),
+                          file_name="Climbfinder_Rankings.xlsx",
+                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    csv_data = df_display.to_csv(index=False)
+    col_b.download_button("Download CSV", data=csv_data,
+                          file_name="Climbfinder_Rankings.csv", mime="text/csv")
