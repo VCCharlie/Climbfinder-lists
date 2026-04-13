@@ -566,6 +566,21 @@ with tab_rank:
 
     rows_rank = st.session_state.get("last_ranking_rows")
     if rows_rank:
+        st.session_state.setdefault("ranking_editor_gen", 0)
+        b1, b2, _ = st.columns([1, 1, 6])
+        with b1:
+            if st.button("Select all (Export)", key="rank_export_all_on"):
+                for r in st.session_state["last_ranking_rows"]:
+                    r["include_in_export"] = True
+                st.session_state["ranking_editor_gen"] += 1
+                st.rerun()
+        with b2:
+            if st.button("Clear all (Export)", key="rank_export_all_off"):
+                for r in st.session_state["last_ranking_rows"]:
+                    r["include_in_export"] = False
+                st.session_state["ranking_editor_gen"] += 1
+                st.rerun()
+
         df = pd.DataFrame(rows_rank)
         if "include_in_export" not in df.columns:
             df["include_in_export"] = True
@@ -595,7 +610,7 @@ with tab_rank:
             hide_index=True,
             use_container_width=True,
             num_rows="fixed",
-            key="ranking_table_editor",
+            key=f"ranking_table_editor_{st.session_state['ranking_editor_gen']}",
         )
         export_df = edited[edited["include_in_export"] == True]  # noqa: E712
         out_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
@@ -671,6 +686,21 @@ with tab_json:
     if "ranking_pick_list" in st.session_state:
         rows = st.session_state["ranking_pick_list"]
         lbl = st.session_state.get("json_region_label", "")
+        st.session_state.setdefault("pick_editor_gen", 0)
+        j1, j2, _ = st.columns([1, 1, 6])
+        with j1:
+            if st.button("Select all (details)", key="json_fetch_all_on"):
+                for r in st.session_state["ranking_pick_list"]:
+                    r["fetch_details"] = True
+                st.session_state["pick_editor_gen"] += 1
+                st.rerun()
+        with j2:
+            if st.button("Clear all (details)", key="json_fetch_all_off"):
+                for r in st.session_state["ranking_pick_list"]:
+                    r["fetch_details"] = False
+                st.session_state["pick_editor_gen"] += 1
+                st.rerun()
+
         df_pick = pd.DataFrame(rows)
         show_cols = ["fetch_details", "name", "length_km", "avg_grade", "difficulty_points",
                      "ascent_m", "summit_m", "category", "country_iso2", "url"]
@@ -694,7 +724,7 @@ with tab_json:
             hide_index=True,
             use_container_width=True,
             num_rows="fixed",
-            key="pick_editor",
+            key=f"pick_editor_{st.session_state['pick_editor_gen']}",
         )
 
         if st.button("Fetch selected details", type="primary"):
