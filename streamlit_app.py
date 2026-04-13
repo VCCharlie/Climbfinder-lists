@@ -235,7 +235,29 @@ def _parse_html(html, page_number):
     soup = BeautifulSoup(html, "html.parser")
     climbs = []
 
-    # Strategy 0: __NEXT_DATA__
+    # Strategy 0: Climbfinder server-rendered ranking cards (must run before generic <table> / link heuristics)
+    card_items = cfe.parse_ranking_items(html)
+    if card_items:
+        # Climbfinder uses 25 climbs per ranking page
+        per_page = 25
+        base = (page_number - 1) * per_page if page_number else 0
+        for i, row in enumerate(card_items):
+            climbs.append({
+                "rank": base + i + 1,
+                "name": row.get("name") or "",
+                "length_km": float(row.get("length_km") or 0),
+                "avg_gradient_pct": float(row.get("avg_grade") or 0),
+                "difficulty_points": int(row.get("difficulty_points") or 0),
+                "elevation_gain_m": int(row.get("ascent_m") or 0),
+                "summit_m": int(row.get("summit_m") or 0),
+                "category": row.get("category") or "",
+                "country_iso2": row.get("country_iso2") or "",
+                "url": row.get("url") or "",
+                "climb_id": row.get("climb_id"),
+            })
+        return climbs, None
+
+    # Strategy 1: __NEXT_DATA__
     script = soup.find("script", id="__NEXT_DATA__")
     if script and script.string:
         try:
@@ -246,7 +268,7 @@ def _parse_html(html, page_number):
     if climbs:
         return climbs, None
 
-    # Strategy 1: HTML table
+    # Strategy 2: HTML table
     table = soup.find("table")
     if table:
         col_map = _detect_table_columns(table)
@@ -263,7 +285,7 @@ def _parse_html(html, page_number):
     if climbs:
         return climbs, None
 
-    # Strategy 2: links
+    # Strategy 3: links
     links = soup.find_all("a", href=re.compile(r"/(climbs?|cols?)/"))
     seen = set()
     for link in links:
@@ -491,6 +513,11 @@ with st.sidebar:
 
 # --- Tab: Ranking table export ---
 with tab_rank:
+    if not st.session_state.get("last_ranking_rows") and not fetch_btn:
+        st.info(
+            "Use **Fetch Rankings** in the sidebar. The table uses Climbfinder’s ranking cards "
+            "so columns stay aligned. Uncheck **Export** to exclude rows from Excel/CSV."
+        )
     if fetch_btn:
         region_id = _resolve_region_id(custom_id, selected_idx, region_options)
 
@@ -535,44 +562,73 @@ with tab_rank:
                     st.success(f"Fetched **{len(all_climbs)}** climbs.")
 
                 if all_climbs:
-                    df = pd.DataFrame(all_climbs)
-                    display_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
-                    df_display = df[display_cols].copy()
-                    df_display.columns = ["Length (km)", "Climb Name", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)"]
+                    st.session_state["last_ranking_rows"] = all_climbs
 
-                    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    rows_rank = st.session_state.get("last_ranking_rows")
+    if rows_rank:
+        df = pd.DataFrame(rows_rank)
+        if "include_in_export" not in df.columns:
+            df["include_in_export"] = True
+        show = [
+            "include_in_export", "rank", "name", "length_km", "avg_gradient_pct",
+            "difficulty_points", "elevation_gain_m", "summit_m", "category", "url",
+        ]
+        for c in show:
+            if c not in df.columns:
+                df[c] = None
+        edited = st.data_editor(
+            df[show],
+            column_config={
+                "include_in_export": st.column_config.CheckboxColumn(
+                    "Export", help="Include this row in Excel/CSV download", default=True
+                ),
+                "rank": st.column_config.NumberColumn("#", disabled=True, format="%d"),
+                "name": st.column_config.TextColumn("Climb", disabled=True),
+                "length_km": st.column_config.NumberColumn("km", disabled=True, format="%.1f"),
+                "avg_gradient_pct": st.column_config.NumberColumn("Avg %", disabled=True, format="%.1f"),
+                "difficulty_points": st.column_config.NumberColumn("Points", disabled=True),
+                "elevation_gain_m": st.column_config.NumberColumn("Gain m", disabled=True),
+                "summit_m": st.column_config.NumberColumn("Top m", disabled=True),
+                "category": st.column_config.TextColumn("Cat", disabled=True),
+                "url": st.column_config.LinkColumn("URL"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            key="ranking_table_editor",
+        )
+        export_df = edited[edited["include_in_export"] == True]  # noqa: E712
+        out_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
+        df_out = export_df[out_cols].copy()
+        df_out.columns = ["Length (km)", "Climb Name", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)"]
 
-                    col_a, col_b = st.columns(2)
-                    excel_buf = io.BytesIO()
-                    df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
-                    col_a.download_button("Download Excel", data=excel_buf.getvalue(),
-                                          file_name="Climbfinder_Rankings.xlsx",
-                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    csv_data = df_display.to_csv(index=False)
-                    col_b.download_button("Download CSV", data=csv_data,
-                                          file_name="Climbfinder_Rankings.csv",
-                                          mime="text/csv")
-                    st.session_state["last_results"] = df_display
-
-    elif "last_results" in st.session_state:
-        df_display = st.session_state["last_results"]
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.caption(f"Export: **{len(df_out)}** of **{len(edited)}** rows (unchecked rows are skipped).")
         col_a, col_b = st.columns(2)
         excel_buf = io.BytesIO()
-        df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
-        col_a.download_button("Download Excel", data=excel_buf.getvalue(),
-                              file_name="Climbfinder_Rankings.xlsx",
-                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        csv_data = df_display.to_csv(index=False)
-        col_b.download_button("Download CSV", data=csv_data,
-                              file_name="Climbfinder_Rankings.csv", mime="text/csv")
+        df_out.to_excel(excel_buf, index=False, sheet_name="Rankings")
+        col_a.download_button(
+            "Download Excel",
+            data=excel_buf.getvalue(),
+            file_name="Climbfinder_Rankings.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=len(df_out) == 0,
+        )
+        csv_data = df_out.to_csv(index=False)
+        col_b.download_button(
+            "Download CSV",
+            data=csv_data,
+            file_name="Climbfinder_Rankings.csv",
+            mime="text/csv",
+            disabled=len(df_out) == 0,
+        )
 
 # --- Tab: JSON export ---
 with tab_json:
     st.markdown(
         "1. Click **Load ranking list** in the sidebar (same region & page range).  \n"
         "2. Tick **Fetch details** for climbs you want.  \n"
-        "3. **Fetch selected details**, then download JSON (BIG-like shape). **`score`** = Climbfinder difficulty points; **`fiets`** is always null (not a Fiets-index)."
+        "3. **Fetch selected details**, then download JSON (BIG-like shape). **`score`** = Climbfinder difficulty points; **`fiets`** is always null (not a Fiets-index).  \n"
+        "The **Ranking table export** tab also has an **Export** checkbox per row for Excel/CSV."
     )
     delay_detail = st.slider("Pause between detail pages (seconds)", 0.25, 3.0, 0.75, 0.25)
 
