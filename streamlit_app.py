@@ -26,6 +26,8 @@ from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
 
+import climbfinder_export as cfe
+
 # ---------------------------------------------------------------------------
 # Region data (same as app.py)
 # ---------------------------------------------------------------------------
@@ -125,6 +127,23 @@ for country, regions in REGIONS_BY_COUNTRY.items():
         ALL_REGIONS.append({"country": country, "name": r["name"], "id": r["id"],
                             "label": f"{r['name']}, {country}"})
 ALL_REGIONS.sort(key=lambda x: x["label"])
+
+
+def _resolve_region_id(custom_id: str, selected_idx, region_options) -> str | None:
+    if custom_id and str(custom_id).strip():
+        return str(custom_id).strip()
+    if selected_idx is not None:
+        return str(region_options[selected_idx]["id"])
+    return None
+
+
+def _resolve_region_label(custom_id: str, selected_idx, region_options) -> str:
+    if selected_idx is not None:
+        r = region_options[selected_idx]
+        return f"{r['name']}, {r['country']}"
+    if custom_id and str(custom_id).strip():
+        return f"Region ID {str(custom_id).strip()}"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +459,8 @@ st.set_page_config(page_title="Climbfinder Aggregator", page_icon="⛰️", layo
 st.title("Climbfinder Ranking Aggregator")
 st.caption("Search regions, scrape climb rankings, and export to Excel or CSV.")
 
+tab_rank, tab_json = st.tabs(["Ranking table export", "JSON export (pick climbs)"])
+
 # --- Sidebar: Region selection ---
 with st.sidebar:
     st.header("Region Selection")
@@ -466,92 +487,199 @@ with st.sidebar:
     end_page = col2.number_input("End page", min_value=1, value=5)
 
     fetch_btn = st.button("Fetch Rankings", type="primary", use_container_width=True)
+    load_list_btn = st.button("Load ranking list (for JSON)", use_container_width=True)
 
-# --- Main area ---
-if fetch_btn:
-    region_id = custom_id.strip() if custom_id.strip() else (
-        region_options[selected_idx]["id"] if selected_idx is not None else None
+# --- Tab: Ranking table export ---
+with tab_rank:
+    if fetch_btn:
+        region_id = _resolve_region_id(custom_id, selected_idx, region_options)
+
+        if not region_id:
+            st.warning("Please select a region or enter a custom Region ID.")
+        else:
+            if end_page < start_page:
+                st.warning("End page must be ≥ start page.")
+            else:
+                end_page_eff = min(end_page, start_page + 19)
+                total_pages = end_page_eff - start_page + 1
+
+                method = "playwright" if playwright_available() else "requests"
+                st.info(f"Scraping region **{region_id}** — pages {start_page}–{end_page_eff} via {method}")
+
+                progress_bar = st.progress(0)
+                all_climbs = []
+                errors = []
+
+                for page_num in range(start_page, end_page_eff + 1):
+                    pct = int(((page_num - start_page) / total_pages) * 100)
+                    progress_bar.progress(pct, text=f"Fetching page {page_num - start_page + 1} of {total_pages}...")
+
+                    page_climbs, err = scrape_page(region_id, page_num)
+                    if err:
+                        errors.append(f"Page {page_num}: {err}")
+                        break
+                    if not page_climbs:
+                        break
+                    all_climbs.extend(page_climbs)
+
+                    if page_num < end_page_eff:
+                        time.sleep(1.0)
+
+                progress_bar.progress(100, text="Done!")
+
+                if errors:
+                    st.warning(f"Completed with issues: {'; '.join(errors)}")
+                elif not all_climbs:
+                    st.warning("No climbs found. Check the region ID or try a different region.")
+                else:
+                    st.success(f"Fetched **{len(all_climbs)}** climbs.")
+
+                if all_climbs:
+                    df = pd.DataFrame(all_climbs)
+                    display_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
+                    df_display = df[display_cols].copy()
+                    df_display.columns = ["Length (km)", "Climb Name", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)"]
+
+                    st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+                    col_a, col_b = st.columns(2)
+                    excel_buf = io.BytesIO()
+                    df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
+                    col_a.download_button("Download Excel", data=excel_buf.getvalue(),
+                                          file_name="Climbfinder_Rankings.xlsx",
+                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    csv_data = df_display.to_csv(index=False)
+                    col_b.download_button("Download CSV", data=csv_data,
+                                          file_name="Climbfinder_Rankings.csv",
+                                          mime="text/csv")
+                    st.session_state["last_results"] = df_display
+
+    elif "last_results" in st.session_state:
+        df_display = st.session_state["last_results"]
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        col_a, col_b = st.columns(2)
+        excel_buf = io.BytesIO()
+        df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
+        col_a.download_button("Download Excel", data=excel_buf.getvalue(),
+                              file_name="Climbfinder_Rankings.xlsx",
+                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        csv_data = df_display.to_csv(index=False)
+        col_b.download_button("Download CSV", data=csv_data,
+                              file_name="Climbfinder_Rankings.csv", mime="text/csv")
+
+# --- Tab: JSON export ---
+with tab_json:
+    st.markdown(
+        "1. Click **Load ranking list** in the sidebar (same region & page range).  \n"
+        "2. Tick **Fetch details** for climbs you want.  \n"
+        "3. **Fetch selected details**, then download JSON (BIG-like shape). **`score`** = Climbfinder difficulty points; **`fiets`** is always null (not a Fiets-index)."
     )
+    delay_detail = st.slider("Pause between detail pages (seconds)", 0.25, 3.0, 0.75, 0.25)
 
-    if not region_id:
-        st.warning("Please select a region or enter a custom Region ID.")
-    else:
-        if end_page < start_page:
+    if load_list_btn:
+        rid = _resolve_region_id(custom_id, selected_idx, region_options)
+        if not rid:
+            st.warning("Please select a region or enter a custom Region ID.")
+        elif end_page < start_page:
             st.warning("End page must be ≥ start page.")
         else:
-            end_page = min(end_page, start_page + 19)
-            total_pages = end_page - start_page + 1
-
-            method = "playwright" if playwright_available() else "requests"
-            st.info(f"Scraping region **{region_id}** — pages {start_page}–{end_page} via {method}")
-
-            progress_bar = st.progress(0)
-            all_climbs = []
-            errors = []
-
-            for page_num in range(start_page, end_page + 1):
-                pct = int(((page_num - start_page) / total_pages) * 100)
-                progress_bar.progress(pct, text=f"Fetching page {page_num - start_page + 1} of {total_pages}...")
-
-                page_climbs, err = scrape_page(region_id, page_num)
-                if err:
-                    errors.append(f"Page {page_num}: {err}")
+            end_eff = min(end_page, start_page + 19)
+            lbl = _resolve_region_label(custom_id, selected_idx, region_options)
+            sess = cfe.new_http_session()
+            merged: list = []
+            errs: list[str] = []
+            bar = st.progress(0, text="Loading ranking pages…")
+            n_pages = end_eff - start_page + 1
+            for i, pnum in enumerate(range(start_page, end_eff + 1)):
+                try:
+                    html = cfe.fetch_ranking_html(rid, pnum, session=sess)
+                    merged.extend(cfe.parse_ranking_items(html))
+                except Exception as exc:  # noqa: BLE001
+                    errs.append(f"Page {pnum}: {exc}")
                     break
-                if not page_climbs:
-                    break
-                all_climbs.extend(page_climbs)
-
-                if page_num < end_page:
-                    time.sleep(1.0)
-
-            progress_bar.progress(100, text="Done!")
-
-            if errors:
-                st.warning(f"Completed with issues: {'; '.join(errors)}")
-            elif not all_climbs:
-                st.warning("No climbs found. Check the region ID or try a different region.")
+                bar.progress(int((i + 1) / n_pages * 100))
+                if pnum < end_eff:
+                    time.sleep(0.6)
+            bar.empty()
+            if errs:
+                st.error("; ".join(errs))
+            elif not merged:
+                st.warning("No climbs parsed from HTML.")
             else:
-                st.success(f"Fetched **{len(all_climbs)}** climbs across **{len(range(start_page, start_page + len(all_climbs) // 25 + (1 if len(all_climbs) % 25 else 0)))}** pages.")
+                st.success(f"Loaded **{len(merged)}** climbs from ranking (pages {start_page}–{end_eff}).")
+                for row in merged:
+                    row.setdefault("fetch_details", False)
+                st.session_state["ranking_pick_list"] = merged
+                st.session_state["json_region_label"] = lbl
 
-            if all_climbs:
-                df = pd.DataFrame(all_climbs)
-                # Show only the 5 relevant columns in the correct order
-                display_cols = ["length_km", "name", "avg_gradient_pct", "difficulty_points", "elevation_gain_m"]
-                df_display = df[display_cols].copy()
-                df_display.columns = ["Length (km)", "Climb Name", "Avg Gradient (%)", "Difficulty Points", "Elev. Gain (m)"]
+    if "ranking_pick_list" in st.session_state:
+        rows = st.session_state["ranking_pick_list"]
+        lbl = st.session_state.get("json_region_label", "")
+        df_pick = pd.DataFrame(rows)
+        show_cols = ["fetch_details", "name", "length_km", "avg_grade", "difficulty_points",
+                     "ascent_m", "summit_m", "category", "country_iso2", "url"]
+        for c in show_cols:
+            if c not in df_pick.columns:
+                df_pick[c] = None
+        editor = st.data_editor(
+            df_pick[show_cols],
+            column_config={
+                "fetch_details": st.column_config.CheckboxColumn("Fetch details", default=False),
+                "name": st.column_config.TextColumn("Climb", disabled=True),
+                "length_km": st.column_config.NumberColumn("km", disabled=True, format="%.1f"),
+                "avg_grade": st.column_config.NumberColumn("Avg %", disabled=True, format="%.1f"),
+                "difficulty_points": st.column_config.NumberColumn("Points", disabled=True),
+                "ascent_m": st.column_config.NumberColumn("Ascent m", disabled=True),
+                "summit_m": st.column_config.NumberColumn("Top m", disabled=True),
+                "category": st.column_config.TextColumn("Cat", disabled=True),
+                "country_iso2": st.column_config.TextColumn("CC", disabled=True),
+                "url": st.column_config.LinkColumn("URL"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            key="pick_editor",
+        )
 
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
+        if st.button("Fetch selected details", type="primary"):
+            chosen = editor[editor["fetch_details"] == True]  # noqa: E712
+            if chosen.empty:
+                st.warning("No rows with **Fetch details** checked.")
+            else:
+                idxs = chosen.index.tolist()
+                selected = [rows[i] for i in idxs if i < len(rows)]
+                session = cfe.new_http_session()
+                out: list[dict] = []
+                err_rows: list[str] = []
+                prog = st.progress(0, text="Fetching detail pages…")
+                for n, summary in enumerate(selected):
+                    url = summary.get("url") or ""
+                    try:
+                        html = cfe.fetch_climb_html(url, session=session)
+                        detail = cfe.parse_climb_detail(html, url)
+                        out.append(cfe.build_export_object(detail, summary, lbl))
+                    except Exception as exc:  # noqa: BLE001
+                        err_rows.append(f"{summary.get('name', url)}: {exc}")
+                    prog.progress(int((n + 1) / len(selected) * 100))
+                    if n < len(selected) - 1:
+                        time.sleep(delay_detail)
+                prog.empty()
+                st.session_state["json_export_batch"] = out
+                st.session_state["json_export_errors"] = err_rows
+                if err_rows:
+                    st.warning("Some failed: " + "; ".join(err_rows[:5]))
+                if out:
+                    st.success(f"Fetched **{len(out)}** detail record(s).")
 
-                # Export buttons
-                col_a, col_b = st.columns(2)
-
-                # Excel export
-                excel_buf = io.BytesIO()
-                df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
-                col_a.download_button("Download Excel", data=excel_buf.getvalue(),
-                                      file_name="Climbfinder_Rankings.xlsx",
-                                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                # CSV export
-                csv_data = df_display.to_csv(index=False)
-                col_b.download_button("Download CSV", data=csv_data,
-                                      file_name="Climbfinder_Rankings.csv",
-                                      mime="text/csv")
-
-                # Store in session state for persistence
-                st.session_state["last_results"] = df_display
-
-# Show previous results if available
-elif "last_results" in st.session_state:
-    df_display = st.session_state["last_results"]
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-    col_a, col_b = st.columns(2)
-    excel_buf = io.BytesIO()
-    df_display.to_excel(excel_buf, index=False, sheet_name="Rankings")
-    col_a.download_button("Download Excel", data=excel_buf.getvalue(),
-                          file_name="Climbfinder_Rankings.xlsx",
-                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    csv_data = df_display.to_csv(index=False)
-    col_b.download_button("Download CSV", data=csv_data,
-                          file_name="Climbfinder_Rankings.csv", mime="text/csv")
+        if st.session_state.get("json_export_batch"):
+            batch = st.session_state["json_export_batch"]
+            st.json(batch[:3] if len(batch) > 3 else batch)
+            if len(batch) > 3:
+                st.caption(f"… and {len(batch) - 3} more in the file.")
+            payload = json.dumps(batch, ensure_ascii=False, indent=2)
+            st.download_button(
+                "Download climbs.json",
+                data=payload,
+                file_name="climbfinder_climbs.json",
+                mime="application/json",
+            )
